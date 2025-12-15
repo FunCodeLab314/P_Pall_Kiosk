@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,13 +8,22 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+
+// --- IMPORT THE FILE YOU JUST GENERATED ---
+import 'firebase_options.dart';
 
 // Global navigator key for provider-driven navigation
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() {
-  // Lock to landscape (kiosk-like)
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase using the credentials you just generated
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Lock to landscape (kiosk-like)
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
@@ -35,6 +45,7 @@ class PillPalApp extends StatelessWidget {
       create: (_) => AppState(),
       child: MaterialApp(
         navigatorKey: navigatorKey,
+        debugShowCheckedModeBanner: false,
         title: 'PillPal',
         theme: ThemeData(
           scaffoldBackgroundColor: Colors.black,
@@ -68,7 +79,7 @@ class PillPalApp extends StatelessWidget {
 class Medication {
   String name;
   Medication({required this.name});
-  factory Medication.fromJson(Map<String, dynamic> j) =>
+  factory Medication.fromJson(Map<dynamic, dynamic> j) =>
       Medication(name: j['name'] ?? '');
   Map<String, dynamic> toJson() => {'name': name};
 }
@@ -86,22 +97,15 @@ class AlarmModel {
     required this.meds,
   });
 
-  factory AlarmModel.fromJson(Map<String, dynamic> j) {
+  factory AlarmModel.fromJson(Map<dynamic, dynamic> j) {
     var medsJson = j['meds'] as List? ?? [];
     return AlarmModel(
-      hour: j['hour'] ?? 0,
-      minute: j['minute'] ?? 0,
+      hour: int.tryParse(j['hour'].toString()) ?? 0,
+      minute: int.tryParse(j['minute'].toString()) ?? 0,
       isActive: j['isActive'] ?? true,
       meds: medsJson.map((m) => Medication.fromJson(m)).toList(),
     );
   }
-
-  Map<String, dynamic> toJson() => {
-    'hour': hour,
-    'minute': minute,
-    'isActive': isActive,
-    'meds': meds.map((e) => e.toJson()).toList(),
-  };
 }
 
 class Patient {
@@ -117,22 +121,15 @@ class Patient {
     required this.alarms,
   });
 
-  factory Patient.fromJson(Map<String, dynamic> j) {
+  factory Patient.fromJson(Map<dynamic, dynamic> j) {
     var alarmsJson = j['alarms'] as List? ?? [];
     return Patient(
       name: j['name'] ?? '',
-      age: j['age'] ?? 0,
-      slotNumber: j['slotNumber'] ?? 0,
+      age: int.tryParse(j['age'].toString()) ?? 0,
+      slotNumber: int.tryParse(j['slotNumber'].toString()) ?? 0,
       alarms: alarmsJson.map((a) => AlarmModel.fromJson(a)).toList(),
     );
   }
-
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'age': age,
-    'slotNumber': slotNumber,
-    'alarms': alarms.map((a) => a.toJson()).toList(),
-  };
 }
 
 // -------------------- App State & MQTT --------------------
@@ -146,39 +143,71 @@ class AppState extends ChangeNotifier {
   Patient? activePatient;
   AlarmModel? activeAlarm;
 
-  // MQTT config (per spec)
+  // Firebase Database Reference
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+
+  // MQTT config (Your HiveMQ Credentials)
   final String _host = 'b18466311acb443e9753aae2266143d3.s1.eu.hivemq.cloud';
   final int _port = 8883;
   final String _username = 'pillpal_device';
   final String _password = 'SecurePass123!';
-  final String _clientId = 'PillPal_Flutter_001';
-  final String _topicSync = 'pillpal/device001/sync';
+  final String _clientId = 'PillPal_Flutter_Kiosk';
+
+  // Topics
   final String _topicCmd = 'pillpal/device001/cmd';
   final String _topicStatus = 'pillpal/device001/status';
-  final String _topicAlarm = 'pillpal/device001/alarm';
 
   late MqttServerClient _client;
   Timer? _clockTimer;
 
   AppState() {
-    // start internal clock and alarm checker
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       now = DateTime.now();
       notifyListeners();
       _checkAlarms();
     });
 
-    // Start MQTT connection
-    Future.microtask(() => _connectMqtt());
+    Future.microtask(() {
+      _connectMqtt();
+      _listenToFirebase();
+    });
   }
 
   int get patientCount => patients.length;
 
+  // --- FIREBASE LISTENER ---
+  void _listenToFirebase() {
+    _dbRef.child('patients').onValue.listen((event) {
+      try {
+        final data = event.snapshot.value;
+        List<Patient> newPatients = [];
+
+        if (data is List) {
+          for (var item in data) {
+            if (item != null) newPatients.add(Patient.fromJson(item));
+          }
+        } else if (data is Map) {
+          data.forEach((key, value) {
+            newPatients.add(Patient.fromJson(value));
+          });
+        }
+
+        patients = newPatients;
+        notifyListeners();
+        print("Firebase: Synced ${patients.length} patients.");
+      } catch (e) {
+        print("Firebase Sync Error: $e");
+      }
+    });
+  }
+
+  // --- MQTT CONNECTION ---
   Future<void> _connectMqtt() async {
     _client = MqttServerClient.withPort(_host, _clientId, _port);
     _client.logging(on: false);
     _client.keepAlivePeriod = 20;
     _client.secure = true;
+    _client.securityContext = SecurityContext.defaultContext;
     _client.onDisconnected = _onDisconnected;
     _client.onConnected = _onConnected;
 
@@ -189,27 +218,18 @@ class AppState extends ChangeNotifier {
     _client.connectionMessage = connMess;
 
     try {
-      mqttStatus = 'connecting';
+      mqttStatus = 'connecting...';
       notifyListeners();
       await _client.connect(_username, _password);
     } catch (e) {
+      print('MQTT Error: $e');
       _client.disconnect();
-    }
-
-    if (_client.connectionStatus?.state == MqttConnectionState.connected) {
-      // subscribe
-      _client.subscribe(_topicSync, MqttQos.atLeastOnce);
-      _client.subscribe(_topicCmd, MqttQos.atLeastOnce);
-      _client.updates!.listen(_onMessage);
-      _publishStatus('connected');
-    } else {
-      mqttStatus = 'disconnected';
-      notifyListeners();
     }
   }
 
   void _onConnected() {
     mqttStatus = 'connected';
+    _client.subscribe(_topicStatus, MqttQos.atLeastOnce);
     notifyListeners();
   }
 
@@ -218,85 +238,16 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _onMessage(List<MqttReceivedMessage<MqttMessage>> messages) {
-    for (final rec in messages) {
-      final topic = rec.topic;
-      final payload = (rec.payload as MqttPublishMessage).payload;
-      final message = MqttPublishPayload.bytesToStringAsString(payload.message);
-
-      if (topic == _topicSync) {
-        _handleSync(message);
-      } else if (topic == _topicCmd) {
-        // handle simple commands if any (e.g., remote triggers)
-        try {
-          final cmd = jsonDecode(message);
-          if (cmd['action'] == 'trigger_alarm') {
-            // find patient/slot and trigger
-            final slot = cmd['slot'];
-            final patient = patients.firstWhere(
-              (p) => p.slotNumber == slot,
-              orElse: () =>
-                  Patient(name: '', age: 0, slotNumber: -1, alarms: []),
-            );
-            if (patient.slotNumber != -1 && patient.alarms.isNotEmpty) {
-              _triggerAlarm(patient, patient.alarms.first);
-            }
-          }
-        } catch (_) {
-          // ignore malformed or plain commands
-        }
-      }
-    }
-  }
-
-  void _handleSync(String payload) {
-    try {
-      final parsed = jsonDecode(payload);
-      List<Patient> newPatients = [];
-      if (parsed is Map && parsed['patients'] != null) {
-        newPatients = (parsed['patients'] as List)
-            .map((p) => Patient.fromJson(p))
-            .toList();
-      } else if (parsed is List) {
-        newPatients = parsed.map((p) => Patient.fromJson(p)).toList();
-      }
-
-      patients = newPatients;
-      mqttStatus = 'synced';
-      notifyListeners();
-    } catch (e) {
-      // ignore parse errors
-    }
-  }
-
-  void _publishStatus(String status) {
-    final msg = jsonEncode({
-      'status': status,
-      'time': DateTime.now().toIso8601String(),
-    });
-    final builder = MqttClientPayloadBuilder();
-    builder.addString(msg);
-    _client.publishMessage(_topicStatus, MqttQos.atLeastOnce, builder.payload!);
-  }
-
-  void _publishAlarmEvent(String event, {Patient? patient}) {
-    final msg = jsonEncode({
-      'event': event,
-      'patient': patient?.name ?? '',
-      'time': DateTime.now().toIso8601String(),
-    });
-    final builder = MqttClientPayloadBuilder();
-    builder.addString(msg);
-    _client.publishMessage(_topicAlarm, MqttQos.atLeastOnce, builder.payload!);
-  }
-
-  // Check every second for matching alarms
+  // --- ALARM LOGIC ---
   void _checkAlarms() {
-    if (isAlarmActive) return; // one at a time
+    if (isAlarmActive) return;
+
     for (final p in patients) {
       for (final a in p.alarms) {
         if (!a.isActive) continue;
-        if (a.hour == now.hour && a.minute == now.minute) {
+
+        // Trigger if times match (and seconds is 0 to avoid multi-trigger)
+        if (a.hour == now.hour && a.minute == now.minute && now.second == 0) {
           _triggerAlarm(p, a);
           return;
         }
@@ -309,55 +260,61 @@ class AppState extends ChangeNotifier {
     activeAlarm = a;
     isAlarmActive = true;
     notifyListeners();
-
-    // Bring Alarm screen to front
     navigatorKey.currentState?.pushNamed('/alarm');
   }
 
-  // Dispense action: publish and clear alarm
+  // --- DISPENSE ACTION ---
   void dispenseMedicine() {
     if (activePatient == null || activeAlarm == null) return;
-    _publishAlarmEvent('medicine_dispensed', patient: activePatient);
-    // Clear the active alarm
+
+    // Send JSON Command to ESP32
+    final msg = jsonEncode({
+      'command': 'DISPENSE',
+      'slot': activePatient!.slotNumber,
+    });
+
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(msg);
+    _client.publishMessage(_topicCmd, MqttQos.atLeastOnce, builder.payload!);
+
+    // Clear Alarm State
     activeAlarm!.isActive = false;
     isAlarmActive = false;
-    // Clear references
     activePatient = null;
     activeAlarm = null;
     notifyListeners();
 
-    // Ensure UI returns to clock
-    navigatorKey.currentState?.pushNamedAndRemoveUntil('/clock', (r) => false);
+    // Go back to clock
+    navigatorKey.currentState?.popUntil(
+      (route) => route.settings.name == '/clock',
+    );
   }
 
-  // Stop alarm (no action)
   void stopAlarm() {
+    // Optional: Send STOP to ESP32
+    final msg = jsonEncode({'command': 'STOP'});
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(msg);
+    _client.publishMessage(_topicCmd, MqttQos.atLeastOnce, builder.payload!);
+
     isAlarmActive = false;
     activePatient = null;
     activeAlarm = null;
     notifyListeners();
-    navigatorKey.currentState?.pushNamedAndRemoveUntil('/clock', (r) => false);
+    navigatorKey.currentState?.popUntil(
+      (route) => route.settings.name == '/clock',
+    );
   }
 
-  // Simulated reboot from UI
   void rebootDevice() {
-    _publishStatus('reboot');
-  }
-
-  @override
-  void dispose() {
-    _clockTimer?.cancel();
-    try {
-      _client.disconnect();
-    } catch (_) {}
-    super.dispose();
+    // Only used for simulation in App
   }
 }
 
 // -------------------- UI Screens --------------------
+
 class TitleScreen extends StatelessWidget {
   const TitleScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -383,10 +340,7 @@ class TitleScreen extends StatelessWidget {
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white24,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 16,
-                      ),
+                      padding: const EdgeInsets.all(16),
                     ),
                     onPressed: () => Navigator.pushNamed(context, '/refill'),
                     child: const Text('Refill Instructions'),
@@ -394,10 +348,7 @@ class TitleScreen extends StatelessWidget {
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white24,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 16,
-                      ),
+                      padding: const EdgeInsets.all(16),
                     ),
                     onPressed: () =>
                         Navigator.pushNamed(context, '/instructions'),
@@ -415,101 +366,10 @@ class TitleScreen extends StatelessWidget {
                   ),
                 ),
                 onPressed: () => Navigator.pushNamed(context, '/clock'),
-                child: const Text('ENTER'),
+                child: const Text('ENTER KIOSK MODE'),
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class RefillPage extends StatelessWidget {
-  const RefillPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Refill Instructions'),
-        backgroundColor: Colors.black87,
-      ),
-      body: Container(
-        padding: const EdgeInsets.all(24),
-        color: Colors.black,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '1. Loosen screws on the top panel.',
-              style: textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '2. Open the hopper and refill medication slots.',
-              style: textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '3. Re-tighten screws and ensure hopper is secure.',
-              style: textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '4. Verify device reports updated status via MQTT.',
-              style: textTheme.bodyLarge,
-            ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('BACK'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class AppInstructionsPage extends StatelessWidget {
-  const AppInstructionsPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('App Instructions'),
-        backgroundColor: Colors.black87,
-      ),
-      body: Container(
-        padding: const EdgeInsets.all(24),
-        color: Colors.black,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '1. Connect the device to the network.',
-              style: textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '2. Ensure MQTT broker credentials are configured.',
-              style: textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '3. Use the Clock Dashboard for monitoring.',
-              style: textTheme.bodyLarge,
-            ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('BACK'),
-            ),
-          ],
         ),
       ),
     );
@@ -523,24 +383,20 @@ class ClockScreen extends StatelessWidget {
       '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   String _formatDate(DateTime dt) =>
       '${_monthName(dt.month)} ${dt.day}, ${dt.year}';
-
-  static String _monthName(int m) {
-    const names = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return names[m - 1];
-  }
+  static String _monthName(int m) => [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ][m - 1];
 
   @override
   Widget build(BuildContext context) {
@@ -573,43 +429,30 @@ class ClockScreen extends StatelessWidget {
                   Positioned(
                     left: 24,
                     bottom: 24,
-                    child: Text(
-                      'Patients: ${state.patientCount}',
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                  ),
-                  Positioned(
-                    right: 24,
-                    bottom: 24,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.redAccent,
-                      ),
-                      onPressed: () {
-                        state.rebootDevice();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Simulated reboot...')),
-                        );
-                      },
-                      child: const Text('REBOOT'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Patients Synced: ${state.patientCount}',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                        Text(
+                          'MQTT: ${state.mqttStatus}',
+                          style: TextStyle(
+                            color: state.mqttStatus == 'connected'
+                                ? Colors.green
+                                : Colors.red,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Positioned(
                     left: 24,
                     top: 24,
-                    child: Row(
-                      children: [
-                        ElevatedButton(
-                          onPressed: () => Navigator.pushNamed(context, '/'),
-                          child: const Text('TITLE'),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton(
-                          onPressed: () =>
-                              Navigator.pushNamed(context, '/refill'),
-                          child: const Text('REFILL'),
-                        ),
-                      ],
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('EXIT'),
                     ),
                   ),
                 ],
@@ -632,13 +475,21 @@ class AlarmScreen extends StatelessWidget {
         final p = state.activePatient;
         final a = state.activeAlarm;
         return Scaffold(
+          backgroundColor: Colors.black,
           body: Container(
-            color: Colors.black,
             padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.redAccent, width: 4),
+            ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(height: 24),
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.red,
+                  size: 80,
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'MEDICATION DUE',
                   style: Theme.of(context).textTheme.headlineLarge?.copyWith(
@@ -654,28 +505,16 @@ class AlarmScreen extends StatelessWidget {
                   ),
                 if (p != null)
                   Text(
-                    'Slot #: ${p.slotNumber}',
+                    'Slot #${p.slotNumber}',
                     style: Theme.of(context).textTheme.bodyLarge,
-                  ),
-                const SizedBox(height: 12),
-                if (a != null)
-                  Text(
-                    'Due at ${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: Colors.redAccent),
                   ),
                 const SizedBox(height: 16),
                 if (a != null)
-                  Column(
-                    children: a.meds
-                        .map(
-                          (m) => Text(
-                            '- ${m.name}',
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
-                        )
-                        .toList(),
+                  ...a.meds.map(
+                    (m) => Text(
+                      '- ${m.name}',
+                      style: const TextStyle(fontSize: 24, color: Colors.white),
+                    ),
                   ),
                 const Spacer(),
                 Row(
@@ -685,30 +524,33 @@ class AlarmScreen extends StatelessWidget {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
+                          horizontal: 40,
+                          vertical: 20,
                         ),
                       ),
-                      onPressed: () {
-                        state.dispenseMedicine();
-                      },
-                      child: const Text('DISPENSE'),
+                      onPressed: () => state.dispenseMedicine(),
+                      child: const Text(
+                        'DISPENSE',
+                        style: TextStyle(fontSize: 24),
+                      ),
                     ),
-                    const SizedBox(width: 24),
+                    const SizedBox(width: 40),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white24,
+                        backgroundColor: Colors.grey,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
+                          horizontal: 40,
+                          vertical: 20,
                         ),
                       ),
                       onPressed: () => state.stopAlarm(),
-                      child: const Text('STOP ALARM'),
+                      child: const Text(
+                        'SKIP / STOP',
+                        style: TextStyle(fontSize: 24),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
               ],
             ),
           ),
@@ -716,4 +558,22 @@ class AlarmScreen extends StatelessWidget {
       },
     );
   }
+}
+
+class RefillPage extends StatelessWidget {
+  const RefillPage({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text("Refill")),
+    body: const Center(child: Text("Refill Instructions Placeholder")),
+  );
+}
+
+class AppInstructionsPage extends StatelessWidget {
+  const AppInstructionsPage({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text("Instructions")),
+    body: const Center(child: Text("App Instructions Placeholder")),
+  );
 }

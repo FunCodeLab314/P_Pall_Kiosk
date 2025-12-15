@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "154183473342",
+    "firebase_url": "https://pill-pal-40808-default-rtdb.firebaseio.com",
+    "project_id": "pill-pal-40808",
+    "storage_bucket": "pill-pal-40808.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:154183473342:android:9440fbd81eca163070e6ef",
+        "android_client_info": {
+          "package_name": "com.example.new_proj"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhHljR1Y3spuD0lFG_VCRAkqqPN8VUMzs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:154183473342:android:52d348574e09809670e6ef",
+        "android_client_info": {
+          "package_name": "com.example.pillpal"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhHljR1Y3spuD0lFG_VCRAkqqPN8VUMzs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

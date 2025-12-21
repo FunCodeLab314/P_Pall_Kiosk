@@ -1,56 +1,47 @@
-plugins {
-    id("com.android.application")
-    // START: FlutterFire Configuration
-    id("com.google.gms.google-services")
-    // END: FlutterFire Configuration
-    id("org.jetbrains.kotlin.android") // Changed from "kotlin-android" to match settings
+allprojects {
+
+    repositories {
+
+        google()
+
+        mavenCentral()
+
+    }
+
 }
 
-android {
-    namespace = "com.example.new_proj"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
 
-    compileOptions {
-        // Fix for local_notifications (Desugaring)
-        isCoreLibraryDesugaringEnabled = true
 
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+val newBuildDir: Directory =
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
+    rootProject.layout.buildDirectory
 
-    defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.new_proj"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
-        
-        // Fix for local_notifications (MultiDex)
-        multiDexEnabled = true
-    }
+        .dir("../../build")
 
-    buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
-        }
-    }
+        .get()
+
+rootProject.layout.buildDirectory.value(newBuildDir)
+
+
+
+subprojects {
+
+    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+
+    project.layout.buildDirectory.value(newSubprojectBuildDir)
+
 }
 
-flutter {
-    source = "../.."
+subprojects {
+
+    project.evaluationDependsOn(":app")
+
 }
 
-dependencies {
-    // Fix for local_notifications (Desugaring Lib)
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+
+
+tasks.register<Delete>("clean") {
+
+    delete(rootProject.layout.buildDirectory)
+
 }

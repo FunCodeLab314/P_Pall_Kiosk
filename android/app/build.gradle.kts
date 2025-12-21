@@ -14,6 +14,9 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Enable Core Library Desugaring for Java 8+ APIs on older Android versions
+        isCoreLibraryDesugaringEnabled = true
+        
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -31,6 +34,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        
+        // Enable MultiDex (required for desugaring)
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -44,4 +50,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Add the desugaring library for Java 8+ API support
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

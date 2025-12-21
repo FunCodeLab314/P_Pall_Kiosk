@@ -24,7 +24,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // --- LOGOUT DIALOG ---
   void _confirmLogout() {
     showDialog(
       context: context,
@@ -42,7 +41,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- REPORT DIALOG (New Feature) ---
   void _showReportDialog(List<Patient> patients) {
     showDialog(
       context: context,
@@ -87,7 +85,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _db.generateReport(patients, context, date);
   }
 
-  // --- HELPER: GET AUTO SLOT ---
   String _getNextAvailableSlot(List<Patient> patients) {
     Set<int> usedSlots = patients.map((p) => int.tryParse(p.slotNumber) ?? 999).toSet();
     for (int i = 1; i <= 24; i++) {
@@ -96,7 +93,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return "Full";
   }
 
-  // --- ADD / EDIT DIALOG ---
   void _showPatientDialog({Patient? patientToEdit, required List<Patient> existingPatients}) {
     final bool isEditing = patientToEdit != null;
     final nameCtrl = TextEditingController(text: isEditing ? patientToEdit.name : '');
@@ -293,7 +289,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- DELETE CONFIRMATION ---
   void _confirmDelete(String id, String name) {
      showDialog(
       context: context,
@@ -315,7 +310,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- PAGE 1: STATS ---
   Widget _buildStatsPage(List<Patient> patients) {
     int totalPatients = patients.length;
     int skippedCount = 0;
@@ -332,7 +326,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
     
-    if (totalPatients == 0 && skippedCount == 0 && takenCount == 0 && pendingCount == 0) pendingCount = 1;
+    // --- FIX: Logic for Empty Graph ---
+    bool isEmpty = (skippedCount == 0 && takenCount == 0 && pendingCount == 0);
+    
+    // Create Chart Sections
+    List<PieChartSectionData> sections;
+    if (isEmpty) {
+      // Show Gray Circle
+      sections = [
+        PieChartSectionData(
+          value: 1, 
+          color: Colors.grey[300], 
+          radius: 30, 
+          showTitle: false
+        )
+      ];
+    } else {
+      sections = [
+        PieChartSectionData(value: takenCount.toDouble(), color: Colors.green, radius: 30, showTitle: false),
+        PieChartSectionData(value: skippedCount.toDouble(), color: Colors.orange, radius: 30, showTitle: false),
+        PieChartSectionData(value: pendingCount.toDouble(), color: Colors.grey[300], radius: 25, showTitle: false),
+      ];
+    }
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -361,11 +376,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 20),
           Expanded(
             child: Row(children: [
-              Expanded(child: PieChart(PieChartData(sectionsSpace: 2, centerSpaceRadius: 40, sections: [
-                PieChartSectionData(value: takenCount.toDouble(), color: Colors.green, radius: 30, showTitle: false),
-                PieChartSectionData(value: skippedCount.toDouble(), color: Colors.orange, radius: 30, showTitle: false),
-                PieChartSectionData(value: pendingCount.toDouble(), color: Colors.grey[300], radius: 25, showTitle: false),
-              ]))),
+              Expanded(
+                child: PieChart(
+                  PieChartData(
+                    sectionsSpace: isEmpty ? 0 : 2,
+                    centerSpaceRadius: 40,
+                    sections: sections,
+                  ),
+                ),
+              ),
               Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
                 _buildLegendItem(Colors.green, "Taken ($takenCount)"),
                 const SizedBox(height: 10),
@@ -384,7 +403,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Row(children: [CircleAvatar(radius: 6, backgroundColor: color), const SizedBox(width: 8), Text(text, style: const TextStyle(fontWeight: FontWeight.w500))]);
   }
 
-  // --- PAGE 2: PATIENTS ---
   Widget _buildPatientsPage(List<Patient> patients) {
     if (patients.isEmpty) return const Center(child: Text("No patients found."));
     return ListView.builder(
@@ -424,7 +442,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             elevation: 0,
             title: const Text("PillPal Admin", style: TextStyle(color: Color(0xFF1565C0), fontWeight: FontWeight.bold)),
             actions: [
-              IconButton(icon: const Icon(Icons.description_outlined, color: Colors.grey), onPressed: () => _showReportDialog(patients)), // Call Dialog
+              IconButton(icon: const Icon(Icons.description_outlined, color: Colors.grey), onPressed: () => _showReportDialog(patients)),
               IconButton(icon: const Icon(Icons.logout, color: Colors.grey), onPressed: _confirmLogout),
             ],
           ),

@@ -64,29 +64,30 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                         const SizedBox(height: 40),
                         Text(
                           _pages[index]["title"]!,
+                          textAlign: TextAlign.center,
                           style: GoogleFonts.poppins(
                             fontSize: 32,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                           ),
-                          textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 20),
+                        // --- FIX IS HERE ---
                         Text(
                           _pages[index]["desc"]!,
+                          textAlign: TextAlign.center, // Moved outside style
                           style: GoogleFonts.poppins(
                             fontSize: 16,
                             color: Colors.white70,
                           ),
-                          textAlign: TextAlign.center,
                         ),
+                        // -------------------
                       ],
                     ),
                   );
                 },
               ),
             ),
-            // Dots Indicator
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(
@@ -104,7 +105,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               ),
             ),
             const SizedBox(height: 40),
-            // Button
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
               child: SizedBox(
@@ -113,7 +113,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 child: ElevatedButton(
                   onPressed: () {
                     if (_currentPage == _pages.length - 1) {
-                      Navigator.pushReplacement(
+                      Navigator.push(
                         context,
                         MaterialPageRoute(builder: (_) => const AuthScreen()),
                       );
@@ -145,7 +145,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             if (_currentPage != _pages.length - 1)
               TextButton(
                 onPressed: () {
-                   Navigator.pushReplacement(
+                   Navigator.push(
                         context,
                         MaterialPageRoute(builder: (_) => const AuthScreen()),
                       );

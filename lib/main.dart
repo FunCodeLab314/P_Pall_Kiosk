@@ -11,6 +11,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import Notifications
 
 import 'firebase_options.dart';
 import 'services.dart';
@@ -18,12 +19,20 @@ import 'auth_screens.dart';
 import 'dashboard.dart';
 import 'welcome_screen.dart';
 
-// 1. Global Key for Navigation access from anywhere
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// --- NOTIFICATIONS SETUP ---
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Initialize Notifications
+  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
   runApp(const PillPalApp());
 }
 
@@ -44,7 +53,6 @@ class PillPalApp extends StatelessWidget {
           colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1565C0)),
           textTheme: GoogleFonts.poppinsTextTheme(),
         ),
-        // 2. StreamBuilder controls the ROOT widget
         home: StreamBuilder<User?>(
           stream: FirebaseAuth.instance.authStateChanges(),
           builder: (context, snapshot) {
@@ -52,10 +60,8 @@ class PillPalApp extends StatelessWidget {
               return const Scaffold(body: Center(child: CircularProgressIndicator()));
             }
             if (snapshot.hasData) {
-              // If logged in, show Dashboard
               return const DashboardScreen();
             }
-            // If not logged in, show Welcome Screen
             return const WelcomeScreen();
           },
         ),
@@ -68,7 +74,6 @@ class PillPalApp extends StatelessWidget {
   }
 }
 
-// ... (Rest of your KioskState and classes remain exactly the same as you pasted)
 class KioskState extends ChangeNotifier {
   final FirestoreService _db = FirestoreService();
   List<Patient> patients = [];
@@ -126,6 +131,23 @@ class KioskState extends ChangeNotifier {
     }
   }
 
+  // --- SHOW PHONE NOTIFICATION ---
+  Future<void> _showNotification(String title, String body) async {
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'alarm_channel', 'PillPal Alarms',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+    );
+    const NotificationDetails details = NotificationDetails(android: androidDetails);
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond, // Unique ID
+      title,
+      body,
+      details,
+    );
+  }
+
   void _processQueue() async {
     if (isAlarmActive || _alarmQueue.isEmpty) return;
 
@@ -137,6 +159,9 @@ class KioskState extends ChangeNotifier {
     activeAlarm = a;
     isAlarmActive = true;
     notifyListeners();
+
+    // Trigger Notification
+    _showNotification("Time for Medication!", "${p.name} - Slot ${p.slotNumber}");
 
     try {
       await _audioPlayer.setVolume(1.0);
@@ -212,9 +237,9 @@ class KioskState extends ChangeNotifier {
   }
 }
 
+// ... KioskModeScreen and AlarmPopup remain standard (same as previous) ...
 class KioskModeScreen extends StatelessWidget {
   const KioskModeScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     return Consumer<KioskState>(
@@ -290,7 +315,6 @@ class KioskModeScreen extends StatelessWidget {
 
 class AlarmPopup extends StatelessWidget {
   const AlarmPopup({super.key});
-
   @override
   Widget build(BuildContext context) {
     return Consumer<KioskState>(
@@ -298,7 +322,6 @@ class AlarmPopup extends StatelessWidget {
         final p = state.activePatient;
         final a = state.activeAlarm;
         if (p == null || a == null) return const Scaffold();
-
         return Scaffold(
           backgroundColor: const Color(0xFF1565C0),
           body: Center(

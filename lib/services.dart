@@ -116,8 +116,10 @@ class Patient {
   String get assignedSlots {
     List<String> slots = [];
     if (patientNumber <= 4) {
+      // Patients 1-4: P#, P#+4, P#+8
       slots = [patientNumber.toString(), (patientNumber + 4).toString(), (patientNumber + 8).toString()];
     } else {
+      // Patients 5-8: P#+8, P#+12, P#+16
       slots = [(patientNumber + 8).toString(), (patientNumber + 12).toString(), (patientNumber + 16).toString()];
     }
     return slots.join(', ');
@@ -202,11 +204,13 @@ class FirestoreService {
       throw Exception("Max 8 patients reached. Delete a patient to add a new one.");
     }
 
-    // Calculate Slots based on your mapping
+    // Calculate Slots based on mapping
     List<String> mySlots = [];
     if (nextNum <= 4) {
+      // 1 -> 1, 5, 9
       mySlots = [nextNum.toString(), (nextNum + 4).toString(), (nextNum + 8).toString()];
     } else {
+      // 5 -> 13, 17, 21
       mySlots = [(nextNum + 8).toString(), (nextNum + 12).toString(), (nextNum + 16).toString()];
     }
 
@@ -422,13 +426,13 @@ class FirestoreService {
     final pdf = pw.Document();
     final String dateStr = DateFormat('MMMM d, yyyy').format(date);
     
-    // Sort logic handled in UI, but we can double check here or just print
     List<List<String>> tableData = records.map((r) => [
       r.patientName,
       r.patientNumber.toString(),
       r.medicationName,
       DateFormat('HH:mm').format(r.actionTime),
       r.status.toUpperCase(),
+      r.slot,
       r.adminName,
     ]).toList();
 
@@ -443,7 +447,7 @@ class FirestoreService {
             ])),
             pw.SizedBox(height: 20),
             pw.Table.fromTextArray(
-              headers: ['Patient', 'No.', 'Medication', 'Time', 'Status', 'Admin/Nurse'],
+              headers: ['Patient', 'No.', 'Medication', 'Time', 'Status', 'Slot', 'Admin'],
               data: tableData,
               headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('1565C0')),
               headerStyle: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold),

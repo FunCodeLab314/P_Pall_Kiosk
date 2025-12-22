@@ -169,9 +169,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           builder: (context, setState) {
             bool isSaving = false;
 
-            // Helper to calculate slot for display
+            // --- KEY LOGIC UPDATE FOR UI DISPLAY ---
             String getSlotForType(String type, int pNum) {
                if (!isEditing && pNum == 0) return "Auto-Assigned";
+               
                if (pNum <= 4) {
                  if (type == 'Breakfast') return pNum.toString();
                  if (type == 'Lunch') return (pNum + 4).toString();

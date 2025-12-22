@@ -18,16 +18,24 @@ import 'services.dart';
 import 'auth_screens.dart';
 import 'dashboard.dart';
 import 'welcome_screen.dart';
+import 'history_screen.dart';
+import 'notifications_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+// --- NOTIFICATIONS SETUP ---
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+  // Initialize Notifications
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings =
+      InitializationSettings(android: initializationSettingsAndroid);
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
   runApp(const PillPalApp());
@@ -43,7 +51,7 @@ class PillPalApp extends StatelessWidget {
       child: MaterialApp(
         navigatorKey: navigatorKey,
         debugShowCheckedModeBanner: false,
-        title: 'PillPal Kiosk',
+        title: 'PillPal',
         theme: ThemeData(
           useMaterial3: true,
           scaffoldBackgroundColor: const Color(0xFFF5F9FF),
@@ -54,7 +62,8 @@ class PillPalApp extends StatelessWidget {
           stream: FirebaseAuth.instance.authStateChanges(),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()));
             }
             if (snapshot.hasData) {
               return const DashboardScreen();
@@ -65,6 +74,8 @@ class PillPalApp extends StatelessWidget {
         routes: {
           '/kiosk': (_) => const KioskModeScreen(),
           '/alarm': (_) => const AlarmPopup(),
+          '/history': (_) => const HistoryScreen(),
+          '/notifications': (_) => const NotificationsScreen(),
         },
       ),
     );
@@ -81,10 +92,10 @@ class KioskState extends ChangeNotifier {
 
   DateTime now = DateTime.now();
   int _lastTriggeredMinute = -1;
-  bool isAlarmActive = false; 
+  bool isAlarmActive = false;
 
   List<Map<String, dynamic>> _alarmQueue = [];
-  
+
   Patient? activePatient;
   AlarmModel? activeAlarm;
 
@@ -93,6 +104,7 @@ class KioskState extends ChangeNotifier {
   KioskState() {
     _db.getPatients().listen((data) {
       patients = data;
+      _checkLowStock(); // Check for low stock on every update
       notifyListeners();
     });
 
@@ -111,8 +123,12 @@ class KioskState extends ChangeNotifier {
     if (now.minute == _lastTriggeredMinute) return;
 
     bool foundAny = false;
+    final currentUserUid = FirebaseAuth.instance.currentUser?.uid;
 
     for (var p in patients) {
+      // Only trigger alarms for patients created by current user
+      if (p.createdByUid != currentUserUid) continue;
+
       for (var a in p.alarms) {
         if (!a.isActive) continue;
         if (a.hour == now.hour && a.minute == now.minute) {
@@ -124,20 +140,39 @@ class KioskState extends ChangeNotifier {
 
     if (foundAny) {
       _lastTriggeredMinute = now.minute;
-      _processQueue(); 
+      _processQueue();
     }
   }
 
+  // --- CHECK LOW STOCK AND SEND NOTIFICATION ---
+  void _checkLowStock() async {
+    for (var p in patients) {
+      for (var a in p.alarms) {
+        if (a.medication.needsRefill()) {
+          // Send notification to ALL users (not just creator)
+          _showNotification(
+            "⚠️ Refill Needed",
+            "Patient ${p.patientNumber} - ${a.medication.name} (Slot ${a.medication.slotNumber}) needs refill",
+          );
+        }
+      }
+    }
+  }
+
+  // --- SHOW PHONE NOTIFICATION ---
   Future<void> _showNotification(String title, String body) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'alarm_channel', 'PillPal Alarms',
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'pillpal_channel',
+      'PillPal Notifications',
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
     );
-    const NotificationDetails details = NotificationDetails(android: androidDetails);
+    const NotificationDetails details =
+        NotificationDetails(android: androidDetails);
     await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond,
+      DateTime.now().millisecondsSinceEpoch % 100000,
       title,
       body,
       details,
@@ -156,23 +191,11 @@ class KioskState extends ChangeNotifier {
     isAlarmActive = true;
     notifyListeners();
 
-    // Use specific slot number if available, else calc (fallback logic for old data)
-    String slotToDisplay = a.slotNumber ?? "?"; 
-    
-    // Fallback logic if slotNumber wasn't saved in DB yet
-    if (slotToDisplay == "?" || slotToDisplay.isEmpty) {
-       if (p.patientNumber <= 4) {
-          if (a.type == 'Breakfast') slotToDisplay = p.patientNumber.toString();
-          else if (a.type == 'Lunch') slotToDisplay = (p.patientNumber + 4).toString();
-          else if (a.type == 'Dinner') slotToDisplay = (p.patientNumber + 8).toString();
-       } else {
-          if (a.type == 'Breakfast') slotToDisplay = (p.patientNumber + 8).toString();
-          else if (a.type == 'Lunch') slotToDisplay = (p.patientNumber + 12).toString();
-          else if (a.type == 'Dinner') slotToDisplay = (p.patientNumber + 16).toString();
-       }
-    }
-
-    _showNotification("Time for Medication!", "${p.name} - Slot $slotToDisplay");
+    // Trigger Notification - only to user who created this patient
+    _showNotification(
+      "💊 Time for Medication!",
+      "${p.name} - ${a.medication.name} (${a.mealType.toUpperCase()})",
+    );
 
     try {
       await _audioPlayer.setVolume(1.0);
@@ -180,7 +203,7 @@ class KioskState extends ChangeNotifier {
     } catch (e) {
       print("Error playing sound: $e");
     }
-    
+
     navigatorKey.currentState?.pushNamed('/alarm');
   }
 
@@ -191,28 +214,33 @@ class KioskState extends ChangeNotifier {
         builder: (ctx) => AlertDialog(
           title: const Text("Connection Error"),
           content: const Text("Kiosk offline. Check internet."),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text("OK"))
+          ],
         ),
       );
       return;
     }
 
     if (activePatient != null && activeAlarm != null) {
-      // Get the specific slot to send to MQTT
-      String slotToSend = activeAlarm!.slotNumber ?? "0"; 
-      
-      final msg = jsonEncode({'command': 'DISPENSE', 'slot': slotToSend});
+      final msg = jsonEncode({
+        'command': 'DISPENSE',
+        'slot': activeAlarm!.medication.slotNumber
+      });
       final builder = MqttClientPayloadBuilder();
       builder.addString(msg);
       _client.publishMessage(_topicCmd, MqttQos.atLeastOnce, builder.payload!);
-      await _db.markTaken(activePatient!.id!, activeAlarm!.id!, activeAlarm!.medications);
+      
+      // Record as taken and reduce box count
+      await _db.markTaken(activePatient!, activeAlarm!);
     }
     _close();
   }
 
   void skip() {
     if (activePatient != null && activeAlarm != null) {
-      _db.markSkipped(activePatient!.id!, activeAlarm!.id!, activeAlarm!.medications);
+      _db.markSkipped(activePatient!, activeAlarm!);
     }
     _close();
   }
@@ -223,16 +251,19 @@ class KioskState extends ChangeNotifier {
     activePatient = null;
     activeAlarm = null;
     notifyListeners();
-    
+
     navigatorKey.currentState?.pop();
 
     Future.delayed(const Duration(milliseconds: 500), () {
-       _processQueue();
+      _processQueue();
     });
   }
 
   Future<void> _connectMqtt() async {
-    _client = MqttServerClient.withPort('b18466311acb443e9753aae2266143d3.s1.eu.hivemq.cloud', 'PillPal_Kiosk', 8883);
+    _client = MqttServerClient.withPort(
+        'b18466311acb443e9753aae2266143d3.s1.eu.hivemq.cloud',
+        'PillPal_Kiosk',
+        8883);
     _client.secure = true;
     _client.securityContext = SecurityContext.defaultContext;
     _client.logging(on: false);
@@ -261,8 +292,18 @@ class KioskModeScreen extends StatelessWidget {
           backgroundColor: const Color(0xFF1565C0),
           body: Stack(
             children: [
-              Positioned(top: -50, right: -50, child: CircleAvatar(radius: 100, backgroundColor: Colors.white.withOpacity(0.1))),
-              Positioned(bottom: -50, left: -50, child: CircleAvatar(radius: 100, backgroundColor: Colors.white.withOpacity(0.1))),
+              Positioned(
+                  top: -50,
+                  right: -50,
+                  child: CircleAvatar(
+                      radius: 100,
+                      backgroundColor: Colors.white.withOpacity(0.1))),
+              Positioned(
+                  bottom: -50,
+                  left: -50,
+                  child: CircleAvatar(
+                      radius: 100,
+                      backgroundColor: Colors.white.withOpacity(0.1))),
               SafeArea(
                 child: Column(
                   children: [
@@ -270,19 +311,41 @@ class KioskModeScreen extends StatelessWidget {
                       padding: const EdgeInsets.all(16),
                       child: Row(
                         children: [
-                          IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
+                          IconButton(
+                              icon: const Icon(Icons.arrow_back,
+                                  color: Colors.white),
+                              onPressed: () => Navigator.pop(context)),
                           const Spacer(),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
-                              color: state.mqttStatus == "Connected" ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2),
+                              color: state.mqttStatus == "Connected"
+                                  ? Colors.green.withOpacity(0.2)
+                                  : Colors.red.withOpacity(0.2),
                               borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: state.mqttStatus == "Connected" ? Colors.greenAccent : Colors.redAccent),
+                              border: Border.all(
+                                  color: state.mqttStatus == "Connected"
+                                      ? Colors.greenAccent
+                                      : Colors.redAccent),
                             ),
                             child: Row(children: [
-                              Icon(Icons.wifi, color: state.mqttStatus == "Connected" ? Colors.greenAccent : Colors.redAccent, size: 16),
+                              Icon(Icons.wifi,
+                                  color: state.mqttStatus == "Connected"
+                                      ? Colors.greenAccent
+                                      : Colors.redAccent,
+                                  size: 16),
                               const SizedBox(width: 8),
-                              Text(state.mqttStatus == "Connected" ? "ONLINE" : "OFFLINE", style: TextStyle(color: state.mqttStatus == "Connected" ? Colors.greenAccent : Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                              Text(
+                                  state.mqttStatus == "Connected"
+                                      ? "ONLINE"
+                                      : "OFFLINE",
+                                  style: TextStyle(
+                                      color: state.mqttStatus == "Connected"
+                                          ? Colors.greenAccent
+                                          : Colors.redAccent,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
                             ]),
                           ),
                         ],
@@ -293,21 +356,43 @@ class KioskModeScreen extends StatelessWidget {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(DateFormat('HH:mm').format(state.now), style: GoogleFonts.rubik(fontSize: 120, fontWeight: FontWeight.w500, color: Colors.white, letterSpacing: -2)),
-                            Text(DateFormat('EEEE, MMM dd, yyyy').format(state.now), style: const TextStyle(fontSize: 24, color: Colors.white70)),
+                            Text(DateFormat('HH:mm').format(state.now),
+                                style: GoogleFonts.rubik(
+                                    fontSize: 120,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white,
+                                    letterSpacing: -2)),
+                            Text(
+                                DateFormat('EEEE, MMM dd, yyyy')
+                                    .format(state.now),
+                                style: const TextStyle(
+                                    fontSize: 24, color: Colors.white70)),
                             const SizedBox(height: 60),
                             Container(
                               padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.white24)),
+                              decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(color: Colors.white24)),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(Icons.people_outline, color: Colors.white, size: 30),
+                                  const Icon(Icons.people_outline,
+                                      color: Colors.white, size: 30),
                                   const SizedBox(width: 16),
-                                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                    Text("${state.patients.length}", style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                                    const Text("Active Patients", style: TextStyle(color: Colors.white70)),
-                                  ]),
+                                  Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text("${state.patients.length} / 8",
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.bold)),
+                                        const Text("Active Patients",
+                                            style: TextStyle(
+                                                color: Colors.white70)),
+                                      ]),
                                 ],
                               ),
                             ),
@@ -335,9 +420,12 @@ class AlarmPopup extends StatelessWidget {
         final p = state.activePatient;
         final a = state.activeAlarm;
         if (p == null || a == null) return const Scaffold();
-
-        // DISPLAY ONLY THE SPECIFIC SLOT
-        String slotDisplay = a.slotNumber ?? "Unknown";
+        
+        IconData mealIcon = a.mealType == 'breakfast'
+            ? Icons.wb_sunny
+            : a.mealType == 'lunch'
+                ? Icons.wb_cloudy
+                : Icons.nightlight;
 
         return Scaffold(
           backgroundColor: const Color(0xFF1565C0),
@@ -345,36 +433,123 @@ class AlarmPopup extends StatelessWidget {
             child: Container(
               margin: const EdgeInsets.all(24),
               constraints: const BoxConstraints(maxWidth: 500),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(32)),
+              decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(32)),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(24),
-                    decoration: const BoxDecoration(color: Color(0xFFE3F2FD), borderRadius: BorderRadius.only(topLeft: Radius.circular(32), topRight: Radius.circular(32))),
+                    decoration: const BoxDecoration(
+                        color: Color(0xFFE3F2FD),
+                        borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(32),
+                            topRight: Radius.circular(32))),
                     child: Column(children: [
-                      const Icon(Icons.medication_liquid, size: 60, color: Color(0xFF1565C0)),
+                      const Icon(Icons.medication_liquid,
+                          size: 60, color: Color(0xFF1565C0)),
                       const SizedBox(height: 16),
-                      Text("IT'S TIME FOR MEDICINE", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: const Color(0xFF1565C0))),
+                      Text("IT'S TIME FOR MEDICINE",
+                          style: GoogleFonts.poppins(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF1565C0))),
                     ]),
                   ),
                   Padding(
                     padding: const EdgeInsets.all(32),
                     child: Column(children: [
-                      Text(p.name, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      // SPECIFIC SLOT DISPLAY ONLY
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.orange)), child: Text("TRAY SLOT: $slotDisplay", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.deepOrange))),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: const Color(0xFF1565C0),
+                            child: Text("P${p.patientNumber}",
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(p.name,
+                              style: const TextStyle(
+                                  fontSize: 32, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.orange)),
+                            child: Row(
+                              children: [
+                                Icon(mealIcon,
+                                    size: 16, color: Colors.deepOrange),
+                                const SizedBox(width: 6),
+                                Text(a.mealType.toUpperCase(),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.deepOrange)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                  color: Colors.purple.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: Colors.purple)),
+                              child: Text("SLOT ${a.medication.slotNumber}",
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.purple))),
+                        ],
+                      ),
                       const SizedBox(height: 32),
-                      const Text("Medications Due:", style: TextStyle(fontSize: 16, color: Colors.grey, fontWeight: FontWeight.bold)),
+                      const Text("Medication:",
+                          style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.grey,
+                              fontWeight: FontWeight.bold)),
                       const SizedBox(height: 10),
-                      ...a.medications.map((m) => Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [const Icon(Icons.check_circle, color: Colors.green), const SizedBox(width: 12), Text(m.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500))]))),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.green),
+                          const SizedBox(width: 12),
+                          Text(a.medication.name,
+                              style: const TextStyle(
+                                  fontSize: 20, fontWeight: FontWeight.w500))
+                        ],
+                      ),
                       const SizedBox(height: 40),
                       Row(children: [
-                        Expanded(child: SizedBox(height: 60, child: OutlinedButton(onPressed: state.skip, child: const Text("SKIP")))),
+                        Expanded(
+                            child: SizedBox(
+                                height: 60,
+                                child: OutlinedButton(
+                                    onPressed: state.skip,
+                                    child: const Text("SKIP")))),
                         const SizedBox(width: 20),
-                        Expanded(child: SizedBox(height: 60, child: ElevatedButton(onPressed: () => state.dispense(context), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1565C0), foregroundColor: Colors.white), child: const Text("DISPENSE")))),
+                        Expanded(
+                            child: SizedBox(
+                                height: 60,
+                                child: ElevatedButton(
+                                    onPressed: () => state.dispense(context),
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFF1565C0),
+                                        foregroundColor: Colors.white),
+                                    child: const Text("DISPENSE")))),
                       ]),
                     ]),
                   ),
